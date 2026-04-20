@@ -2,7 +2,8 @@
 A pipeline for detecting active prophage or other viral regions in bacterial genomes using sequencing depth analysis. It tests whether predicted prophage regions exhibit significantly elevated sequencing read depth compared to the host genomic background — a hallmark of active phage replication or lytic induction.
 
 ## Overview
-Prophage activity detection is based on a core fact: Active prophage replication increases their genome copy number relative to their hosts, which manifests as a discrepancy in sequencing depth distributions between the prophage and its host background. ACTIVE quantifies this difference using robust statistical tests and effect size estimation.
+Prophage activity detection is based on a core rationale: Active prophage replication increases their genome copy number relative to their hosts, which manifests as a discrepancy in sequencing depth distributions between the prophage and its host background. ACTIVE quantifies this difference using robust statistical tests and effect size estimation.
+![image](https://github.com/SIAT-MaLab/ACTIVE/blob/main/figures1a.png)
 
 The pipeline proceeds through four main stages:
 
@@ -46,29 +47,24 @@ install.packages(c("tseries", "brunnermunzel", "effsize", "doParallel", "foreach
 ## Installation
 No installation is required. Download the single script and make it executable:
 ```bash
-# Download
-wget https://github.com/<your-repo>/active/releases/latest/download/active_0420_v3.sh
-
-# Make executable
-chmod +x active.sh
-
-# Verify
 bash active.sh -h
 ```
 ## Input
 ### Host genomes (`-g`)
 
-A directory containing one or more host genome FASTA files. Each file must have the `.fasta` extension. The filename stem (without extension) is used as the genome identifier throughout the pipeline.
+A **directory** containing one or more host genome FASTA files. Each file must have the `.fasta` extension. The filename stem (without extension) is used as the genome identifier throughout the pipeline.
 ```
 genomes/
-    strain_A.fasta
-    strain_B.fasta
-    strain_C.fasta
+    strainA.fasta
+    strainB.fasta
+    strainC.fasta
 ```
-> **Contig naming convention:** The pipeline resolves genome identities by splitting contig names on the first underscore (`_`). Contigs should be named as `<genome_prefix>_<number>` (e.g., `strainA_1`, `strainA_2`). This convention is required when multiple genomes are concatenated into a single FASTA reference; see [Notes](#notes-on-input-data-compatibility).
+> **Contig naming convention:** The pipeline infers genome identity from the first underscore-delimited field of each contig name. Contigs must follow the pattern <genome_id>_<number> (e.g., EcoliK12_1, EcoliK12_2). **Avoid underscores in the genome identifier itself**, as the pipeline will split on the first _ and treat only the preceding text as the genome prefix. This convention is especially important when multiple genomes are concatenated into a single FASTA reference.
+
+> **Concatenated reference genomes:** Multiple genomes may be concatenated into a single `.fasta` reference file(especially in MAGs from same sample), provided all contigs follow the naming convention above. An **index table (`-i`)** must then be used to direct sample reads to the correct reference file. Note that concatenating closely related genomes can introduce ambiguous multi-mapping reads, which may affect depth estimates even with `ambiguous=random` (BBMap).
 
 ### Sequencing data (`-s`)
-A directory containing sequencing reads. Naming conventions must be followed exactly:
+A **directory** containing sequencing reads. Naming conventions must be followed exactly:
 | Data type | Required filename pattern |
 |------|------|
 | Illumina R1 | `<sample>_1_clean.fastq` or `<sample>_1_clean.fastq.gz` |
@@ -83,9 +79,8 @@ When both Illumina and ONT data are present for the same sample, BAMs are merged
 
 
 ### Phage region coordinates (`-p`)
-A tab-separated plain-text file **(no header)** listing predicted prophage regions:
+A tab-separated plain-text file **(no header)** listing predicted prophage regions: contig name; start; end
 ```
-contig_name    start    end
 strainA_1      45231    78940
 strainA_3      120000   155000
 strainB_2      88200    119400
@@ -94,7 +89,7 @@ strainB_2      88200    119400
 This file can be generated from any prophage prediction tool (e.g., PHASTER, VirSorter2, geNomad, DeepVirFinder) by extracting the relevant coordinate columns.
 
 ### Index table (`-i`, optional)
-A tab-separated file with a header row mapping sequencing sample to reference genome. Required when sample identifiers do not match genome filenames, or when one sample should be mapped against multiple reference genomes.
+A tab-separated file **with a header** row mapping sequencing sample to reference genome. Required when sample identifiers do not match genome filenames, or when one sample should be mapped against multiple reference genomes.
 ```
 sample    ref
 sampleA   strainA
@@ -115,7 +110,7 @@ bash active.sh \
 ```
 ### Percies mode
 ```bash
-bash active_0420_v3.sh \
+bash active.sh \
     -g /path/to/genomes/ \
     -s /path/to/reads/ \
     -p prophage_regions.tsv \
@@ -124,7 +119,7 @@ bash active_0420_v3.sh \
 ```
 ### With index table and custom parameters
 ```bash
-bash active_0420_v3.sh \
+bash active.sh \
     -g /path/to/genomes/ \
     -s /path/to/reads/ \
     -p prophage_regions.tsv \
@@ -140,7 +135,7 @@ bash active_0420_v3.sh \
 ### Remove intermediate file
 ```bash
 # Delete all intermediate files; keep only final results
-bash active_0420_v3.sh \
+bash active.sh \
     -g /path/to/genomes/ \
     -s /path/to/reads/ \
     -p prophage_regions.tsv \
@@ -205,28 +200,30 @@ bash active_0420_v3.sh \
 ```
 output_dir/
 ├── activity_results/
-│   └── <mode>/                          # Final results (always retained)
+│   └── <mode>/                                   # Final results (always retained)
 │       └── <sample>_phage_depth_stats_summary_final.csv
 ├── mapping_results/
 │   └── <sample>/
-│       ├── <sample>_<ref>.bam           # Aligned reads
+│       ├── <sample>_<ref>.bam                    # Aligned reads
 │       ├── <sample>_<ref>.bam.bai
-│       ├── global/                      # Contig/prefix lists and region subsets
+│       ├── <sample>_phage_basic_stats_summary.csv     # Descriptive statistics (fast mode)
+│       ├── <sample>_basic_stats_summary.csv           # Descriptive statistics (precise mode)
+│       ├── global/                               # Contig/prefix lists and region subsets
 │       └── depth_to_stat/
 │           └── <genome_prefix>/
-│               ├── phage_depth_*.txt    # Per-position depth in prophage regions
-│               ├── *_mgs_depth.txt      # Host background depth (fast mode)
-│               └── *_host_nonphage_depth.txt  # Host background depth (precise mode)
-├── prodigal_results/                    # Prodigal GFF/FAA (fast mode)
-├── fetchmgs_results/                    # FetchMGs scores (fast mode)
-├── mgs_ext_results/                     # MGS genomic coordinates (fast mode)
-├── mgs_ordinate.tsv                     # Simplified MGS coordinate table
-└── target_cogs_list.txt                 # COG IDs passing score threshold
+│               ├── phage_depth_*.txt             # Per-position depth in prophage regions
+│               ├── *_mgs_depth.txt               # Host background depth (fast mode)
+│               └── *_host_nonphage_depth.txt     # Host background depth (precise mode)
+├── prodigal_results/                             # Prodigal GFF/FAA (fast mode)
+├── fetchmgs_results/                             # FetchMGs scores (fast mode)
+├── mgs_ext_results/                              # MGS genomic coordinates (fast mode)
+├── mgs_ordinate.tsv                              # Simplified MGS coordinate table
+└── target_cogs_list.txt                          # COG IDs passing score threshold
 ```
 
 ## Output example
-
-The primary output is `<sample>_phage_depth_stats_summary_final.csv`. 
+### Main output: Stastical test results
+`<sample>_phage_depth_stats_summary_final.csv`. 
 
 Key columns:
 
@@ -247,12 +244,39 @@ Key columns:
 | Delta_CI_2.5 / Delta_CI_97.5 | 95% confidence interval of Cliff's Δ (precise mode, significant only) |
 | Effect_Size_Type/ Effect_Size_Value | Effect size metric and value (fast mode) |
 
-## Notes on Input Data Compatibility
-### Contig naming
-The pipeline infers genome identity from the first underscore-delimited field of each contig name. Contigs should follow the pattern `<genome>_<number>`. For example, contigs from genome `Ecoli-K12` should be named `Ecoli-K12_1`, `Ecoli-K12_2`, etc. **Avoid using underscores in genome**.
+### Other output: Descriptive statistics
+ `*_phage_basic_stats_summary.csv` / `*_basic_stats_summary.csv`
 
-### Concatenated reference genomes
-Multiple genomes may be concatenated into a single `.fasta` reference file(especially in MAGs from same sample), provided all contigs follow the naming convention above. An index table (`-i`) must then be used to direct sample reads to the correct reference file. Note that concatenating closely related genomes can introduce ambiguous multi-mapping reads, which may affect depth estimates even with `ambiguous=random` (BBMap).
+ Key columns:
+
+| Column | Description |
+|------|------|
+| Folder | Sample name |
+| Genome| Region type: `phage`, `host_mgs` (fast mode), or `host_non_phage` (precise mode) |
+| File| Source depth file name |
+| Mean| Mean depth of given region |
+| Meadian| Median depth of given region |
+| Variance| Variance of sequencing depth |
+| COVERAGE| Fraction of positions with depth > 0 (only prophage region) |
+
+A companion file recording depth summary statistics for every region processed, regardless of whether it passed the coverage threshold or hypothesis testing. This file is produced unconditionally alongside the test results. **Notion**: --rmall will remove this results
+
+## Statistical Methods
+Test selection is based on normality assessment using the Jarque-Bera test (alpha = 0.05) applied independently to the phage and host depth distributions:
+
+Both normal: Levene's F-test for variance equality -> Student's t-test (equal variance) or Welch's t-test (unequal variance)
+Either non-normal: Brunner-Munzel test (one-sided, testing phage > host)
+
+All tests are one-sided with alpha = 0.01.
+For significant Brunner-Munzel results (precise mode), effect size is estimated using permutation-based Cliff's delta:
+
+Host depth vectors are subsampled (up to 10,000 positions per iteration) and Cliff's delta is computed against the full phage depth vector
+The process is repeated --iter times (default: 500) in parallel
+The mean and 95% bootstrap CI of delta are reported
+
+For significant t-test results (fast mode), Hedges' g (bias-corrected Cohen's D) is reported.
+A prophage region is excluded from hypothesis testing if fewer than --cov (default: 75%) of its positions have non-zero depth, as sparse coverage may indicate assembly artifacts or insufficient read recruitment rather than biological inactivity. Excluded regions are still recorded in the descriptive statistics file with their coverage value and depth summary statistics.
+![image](https://github.com/SIAT-MaLab/ACTIVE/blob/main/figures1b.png)
 
 ## Citation
 If you use active in your research, please cite:
