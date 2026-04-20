@@ -1,4 +1,4 @@
-# ACTIVE
+# ACTIVE--Activity Comparison Test for Induced Viral Elements
 A pipeline for detecting active prophage or other viral regions in bacterial genomes using sequencing depth analysis. It tests whether predicted prophage regions exhibit significantly elevated sequencing read depth compared to the host genomic background — a hallmark of active phage replication or lytic induction.
 
 ## Overview
