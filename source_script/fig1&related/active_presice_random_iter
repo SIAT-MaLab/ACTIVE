@@ -1,0 +1,275 @@
+suppressPackageStartupMessages({
+  library(tseries)
+  library(brunnermunzel)
+  library(effsize)
+  library(doParallel)
+  library(foreach)
+})
+
+
+.parse_threads <- function(default = 22) {
+  args <- commandArgs(trailingOnly = TRUE)
+  hit <- grep("^--threads=", args, value = TRUE)
+  if (length(hit) > 0) {
+    val <- suppressWarnings(as.integer(sub("^--threads=", "", hit[1])))
+    if (!is.na(val) && val > 0) return(val)
+  }
+  idx <- which(args == "--threads")
+  if (length(idx) > 0 && length(args) >= idx + 1) {
+    val <- suppressWarnings(as.integer(args[idx + 1]))
+    if (!is.na(val) && val > 0) return(val)
+  }
+  return(default)
+}
+
+
+.parse_iters <- function(default = 500) {
+  args <- commandArgs(trailingOnly = TRUE)
+  hit <- grep("^--iters=", args, value = TRUE)
+  if (length(hit) > 0) {
+    val <- suppressWarnings(as.integer(sub("^--iters=", "", hit[1])))
+    if (!is.na(val) && val > 0) return(val)
+  }
+  idx <- which(args == "--iters")
+  if (length(idx) > 0 && length(args) >= idx + 1) {
+    val <- suppressWarnings(as.integer(args[idx + 1]))
+    if (!is.na(val) && val > 0) return(val)
+  }
+  return(default)
+}
+
+.parse_flag <- function(name, default = TRUE) {
+  args <- commandArgs(trailingOnly = TRUE)
+  if (paste0("--", name) %in% args) return(TRUE)
+  if (paste0("--no-", name) %in% args) return(FALSE)
+  if ("--quiet" %in% args && name == "verbose") return(FALSE)
+  if ("--verbose" %in% args && name == "verbose") return(TRUE)
+  default
+}
+
+.parse_mapdir_required <- function() {
+  args <- commandArgs(trailingOnly = TRUE)
+  hit <- grep("^--mapdir=", args, value = TRUE)
+  if (length(hit) > 0) {
+    path <- sub("^--mapdir=", "", hit[1])
+  } else {
+    idx <- which(args == "--mapdir")
+    path <- if (length(idx) > 0 && length(args) >= idx + 1) args[idx + 1] else ""
+  }
+  if (!nzchar(path)) stop("Missing required argument: --mapdir <mapping_results directory>", call. = FALSE)
+  if (!dir.exists(path)) stop(sprintf("mapdir does not exist: %s", path), call. = FALSE)
+  return(path)
+}
+
+alpha   <- 0.01
+cores   <- .parse_threads(22)
+n_iters <- .parse_iters(500)
+verbose <- .parse_flag("verbose", TRUE)
+
+vcat <- function(fmt, ...) {
+  if (isTRUE(verbose)) cat(sprintf(fmt, ...))
+}
+
+
+root_dir <- .parse_mapdir_required()
+if (!dir.exists(root_dir)) stop(sprintf("no dir：%s", root_dir))
+
+sample_dirs <- list.dirs(path = root_dir, full.names = TRUE, recursive = FALSE)
+sample_dirs <- sample_dirs[!grepl("global$", basename(sample_dirs))]
+message(sprintf("dir counts：%d", length(sample_dirs)))
+vcat("[SETUP]  cores = %d\n", cores)
+vcat("[SETUP] Cliff's delta sampling iters = %d\n", n_iters)
+
+for (s_idx in seq_along(sample_dirs)) {
+  sample_dir <- sample_dirs[s_idx]
+  folder_name <- basename(sample_dir)
+  cat(sprintf("\n======== [%d/%d] sample: %s ========\n", s_idx, length(sample_dirs), folder_name))
+
+  stat_main_dir <- file.path(sample_dir, "depth_to_stat")
+  if (!dir.exists(stat_main_dir)) {
+    cat("  non depth_to_stat，skipped\n")
+    next
+  }
+
+  target_dirs <- list.dirs(path = stat_main_dir, full.names = TRUE, recursive = FALSE)
+  cat(sprintf("  targets dir：%d\n", length(target_dirs)))
+
+
+  results <- data.frame(
+    Folder = character(), Genome = character(), Compare = character(),
+    Phage_File = character(), Coverage = numeric(), Test_Type = character(),
+    p_value = numeric(), Significant = character(), BM_Prob_Superiority = numeric(),
+    Q95 = numeric(), Q99 = numeric(), Phage_Sites = numeric(),
+    Phage_OverQ95 = numeric(), Phage_OverQ99 = numeric(),
+    RR_Q95 = numeric(), RR_Q99 = numeric(),
+    stringsAsFactors = FALSE
+  )
+
+  stat_results <- data.frame(
+    Folder = character(), Genome = character(), Region = character(), File = character(),
+    Mean = numeric(), Median = numeric(), Variance = numeric(), COVERAGE = numeric(),
+    stringsAsFactors = FALSE
+  )
+
+  for (g_idx in seq_along(target_dirs)) {
+    datadir <- target_dirs[g_idx]
+    genomename <- basename(datadir)
+    cat(sprintf("\n---- [%d/%d] target：%s ----\n", g_idx, length(target_dirs), genomename))
+
+    host_file   <- list.files(path = datadir, pattern = "_host_nonphage_depth\\.txt$", full.names = TRUE)
+    phage_files <- list.files(path = datadir, pattern = "^phage_depth.*\\.txt$", full.names = TRUE)
+    cat(sprintf("  host: %d, phage region: %d\n", length(host_file), length(phage_files)))
+
+    if (length(host_file) == 0 | length(phage_files) == 0) {
+      cat("  lack host or phage skipped \n")
+      next
+    }
+
+    host <- tryCatch(read.table(host_file[1], header = FALSE), error = function(e) NULL)
+    if (is.null(host) || ncol(host) < 3) { cat(" error in host \n"); next }
+    colnames(host) <- c("id","pos","depth")
+    host_depth <- as.numeric(host$depth); host_depth <- host_depth[is.finite(host_depth)]
+    if (length(host_depth) == 0) { cat("  host without depth\n"); next }
+    nonphage_sites <- length(host_depth)
+    vcat("  host nonphage sites: %d；mean=%.4f，median=%.4f\n",
+         nonphage_sites, mean(host_depth), median(host_depth))
+
+    stat_results <- rbind(stat_results, data.frame(
+      Folder=folder_name, Genome=genomename, Region="host_non_phage",
+      File=basename(host_file[1]), Mean=mean(host_depth), Median=median(host_depth),
+      Variance=stats::var(host_depth), COVERAGE=NA_real_
+    ))
+
+    phage_depth_all <- unlist(lapply(phage_files, function(f) {
+      df <- tryCatch(read.table(f, header = FALSE), error = function(e) NULL)
+      if (is.null(df) || ncol(df) < 3) return(numeric(0))
+      as.numeric(df[[3]])
+    }))
+    phage_depth_all <- phage_depth_all[is.finite(phage_depth_all)]
+    all_depth <- c(phage_depth_all, host_depth)
+    if (length(all_depth) == 0) { cat("  no phage depth，skipped\n"); next }
+
+    q95 <- as.numeric(quantile(all_depth, 0.95, names = FALSE, type = 7))
+    q99 <- as.numeric(quantile(all_depth, 0.99, names = FALSE, type = 7))
+    nonphage_over_q95 <- sum(host_depth > q95)
+    nonphage_over_q99 <- sum(host_depth > q99)
+    p0_95 <- nonphage_over_q95 / nonphage_sites
+    p0_99 <- nonphage_over_q99 / nonphage_sites
+    vcat("  Q95=%.4f, Q99=%.4f；host>Q95=%d, host>Q99=%d\n",
+         q95, q99, nonphage_over_q95, nonphage_over_q99)
+
+    for (f in phage_files) {
+      phage <- tryCatch(read.table(f, header = FALSE), error = function(e) NULL)
+      if (is.null(phage) || ncol(phage) < 3) { vcat("  [SKIP] %s error in phage\n", basename(f)); next }
+      colnames(phage) <- c("id","pos","depth")
+      phage_depth <- as.numeric(phage$depth); phage_depth <- phage_depth[is.finite(phage_depth)]
+      phage_sites <- length(phage_depth)
+      if (phage_sites == 0) { vcat("  [SKIP] %s error in phage depth\n", basename(f)); next }
+
+      coverage <- sum(phage_depth > 0) / phage_sites
+      vcat("  phage %s：sites=%d, coverage=%.4f\n", basename(f), phage_sites, coverage)
+
+      stat_results <- rbind(stat_results, data.frame(
+        Folder=folder_name, Genome=genomename, Region="phage", File=basename(f),
+        Mean=mean(phage_depth), Median=median(phage_depth),
+        Variance=stats::var(phage_depth), COVERAGE=round(coverage, 4)
+      ))
+
+      if (coverage < 0.75) {
+        cat(sprintf("  [COVERAGE FAIL] %s coverage %.4f < 0.75，skip test\n", basename(f), coverage))
+        results <- rbind(results, data.frame(
+          Folder=folder_name, Genome=genomename, Compare="phage vs host_nonphage",
+          Phage_File=basename(f), Coverage=round(coverage,4),
+          Test_Type=NA_character_, p_value=NA_real_, Significant="Coverage failed",
+          BM_Prob_Superiority=NA_real_, Q95=NA_real_, Q99=NA_real_, Phage_Sites=phage_sites,
+          Phage_OverQ95=NA_real_, Phage_OverQ99=NA_real_, RR_Q95=NA_real_, RR_Q99=NA_real_
+        ))
+        next
+      }
+
+      test_type <- NA_character_; pval <- NA_real_; significant <- "No"
+      bm_prob <- NA_real_
+      phage_over_q95 <- NA_real_; phage_over_q99 <- NA_real_
+      rr_95 <- NA_real_; rr_99 <- NA_real_
+
+      jb1 <- tryCatch(jarque.bera.test(phage_depth), error = function(e) NULL)
+      jb2 <- tryCatch(jarque.bera.test(host_depth),  error = function(e) NULL)
+      norm1 <- !is.null(jb1) && !is.na(jb1$p.value) && jb1$p.value > 0.05
+      norm2 <- !is.null(jb2) && !is.na(jb2$p.value) && jb2$p.value > 0.05
+
+      if (norm1 & norm2) {
+        vtest <- var.test(phage_depth, host_depth)
+        if (vtest$p.value > 0.05) {
+          ttest <- t.test(phage_depth, host_depth, alternative="greater", var.equal=TRUE)
+          test_type <- "Student's t-test"; pval <- ttest$p.value
+        } else {
+          ttest <- t.test(phage_depth, host_depth, alternative="greater", var.equal=FALSE)
+          test_type <- "Welch's t-test"; pval <- ttest$p.value
+        }
+        if (!is.na(pval) && pval < alpha) significant <- "Yes"
+        vcat("  [%s] p=%.4g -> %s\n", test_type, pval, significant)
+      } else {
+        bmtest <- brunnermunzel::brunnermunzel.test(phage_depth, host_depth, alternative="greater")
+        test_type <- "Brunner-Munzel"; pval <- bmtest$p.value
+        bm_prob <- suppressWarnings(as.numeric(bmtest$estimate))
+        vcat("  [BM] p=%.4g, ProbSup=%.4f", pval, bm_prob)
+        if (!is.na(pval) && pval < alpha) {
+          significant <- "Yes"
+          phage_over_q95 <- sum(phage_depth > q95)
+          phage_over_q99 <- sum(phage_depth > q99)
+          p1_95 <- phage_over_q95 / phage_sites
+          p1_99 <- phage_over_q99 / phage_sites
+          rr_95 <- ifelse(p0_95 == 0, NA_real_, p1_95 / p0_95)
+          rr_99 <- ifelse(p0_99 == 0, NA_real_, p1_99 / p0_99)
+          vcat(" -> significance；>Q95=%d, >Q99=%d, RR95=%.3f, RR99=%.3f\n",
+               phage_over_q95, phage_over_q99, rr_95, rr_99)
+
+          #  Cliff's delta
+          set.seed(123)
+          len_host_sample <- min(10000L, length(host_depth))
+          
+          cl <- makeCluster(cores)
+          registerDoParallel(cl)
+
+          cliff_deltas <- foreach(i = 1:n_iters, .combine = c, .packages = "effsize") %dopar% {
+            idx <- sample.int(length(host_depth), len_host_sample, replace = FALSE)
+            sub_host <- host_depth[idx]
+            res <- try(effsize::cliff.delta(phage_depth, sub_host), silent = TRUE)
+            if (inherits(res, "try-error")) NA_real_ else suppressWarnings(as.numeric(res$estimate))
+          }
+          stopCluster(cl)
+
+
+          phage_basename <- sub("\\.txt$", "", basename(f))
+          delta_out_file <- file.path(sample_dir, sprintf("%s_%d.csv", phage_basename, n_iters))
+          
+
+          delta_df <- data.frame(
+            Iteration = 1:n_iters,
+            Cliffs_Delta = cliff_deltas
+          )
+          write.csv(delta_df, delta_out_file, row.names = FALSE)
+
+        } else {
+          cat(sprintf(" -> non-significance\n"))
+        }
+      }
+
+      results <- rbind(results, data.frame(
+        Folder=folder_name, Genome=genomename, Compare="phage vs host_nonphage",
+        Phage_File=basename(f), Coverage=round(coverage,4),
+        Test_Type=test_type, p_value=pval, Significant=significant,
+        BM_Prob_Superiority=bm_prob, Q95=q95, Q99=q99, Phage_Sites=phage_sites,
+        Phage_OverQ95=phage_over_q95, Phage_OverQ99=phage_over_q99,
+        RR_Q95=rr_95, RR_Q99=rr_99
+      ))
+    } # phage_files
+  } # target_dirs
+
+  out1 <- file.path(sample_dir, sprintf("%s_phage_depth_stats_summary_final.csv", folder_name))
+  out2 <- file.path(sample_dir, sprintf("%s_basic_stats_summary.csv", folder_name))
+  write.csv(results, out1, row.names = FALSE)
+  write.csv(stat_results, out2, row.names = FALSE)
+}
+
+cat("\nall done\n")
