@@ -1,0 +1,37 @@
+
+start_time=$(date +%s)
+
+mkdir -p temp
+
+for file in *fna; do
+    name=$(basename "$file" .fna)      blast_result=./temp/${name}_blastn.txt
+    blastn -query "$file" -db "/home/huangyan/experiment/SPA/2-2/GBIC/ref/gbicgenome" -outfmt "6 qseqid sseqid sstart send score" -max_target_seqs 10 -out "$blast_result" -num_threads 27
+    echo "now blast $file"
+    max_score=./temp/${name}_max_score.txt
+    ref_id=$(echo "$name" | awk -F'_' '{print $2"_"$3}') 
+    sort -k5,5nr "$blast_result" | awk -v ref_id="$ref_id" -v genome="$name" '
+    {
+        if (NR == 1) {
+            max_score = $5;       
+   }
+        if ($5 == max_score && $2 == ref_id) {  
+            print genome, $2, $3, $4;  
+            exit;
+        }
+    }' > "$max_score"
+
+done
+awk '{$1=$1}1' OFS='\t' ./temp/*max_score.txt | (echo -e "genome\tcontig\tstart\tstop"; cat) > all_ordinate.tsv
+
+echo "Process completed. The final file is all_ordinate.tsv"
+
+end_time=$(date +%s)
+duration=$((end_time - start_time))
+
+hours=$((duration / 3600))
+minutes=$(( (duration % 3600) / 60 ))
+seconds=$((duration % 60))
+
+echo "========================================"
+echo "Total Execution Time: ${hours}h ${minutes}m ${seconds}s"
+echo "========================================"
