@@ -1,0 +1,8 @@
+sed -e 's/_CDS.*//' -e 's/\(.*\)-\([^-]*\)$/\1_\2/' terL.faa > tmp_terL.faa
+grep "^>" tmp_terL.faa | sort | uniq -d > dups.txt 
+awk 'NR==FNR{bad[$1]=1; next} /^>/{flag=0; if($1 in bad) flag=1} !flag' dups.txt tmp_terL.faa > new_terL.faa
+
+mafft --thread 20 --auto new_terL.faa > terL_aligned.fasta
+echo "!!!!!!!!!!mafft done !!!!!!!!!"
+fasttree -wag terL_aligned.fasta > terL_fasttree.tree
+echo "!!!!!!!!!!fasttree done !!!!!!!!!"
