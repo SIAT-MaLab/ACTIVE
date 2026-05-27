@@ -1,0 +1,128 @@
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(ggplot2)
+  library(foreach)
+  library(doParallel)
+})
+
+OUTPUT_DIR <- "host_viral_diversity_results"
+if (!dir.exists(OUTPUT_DIR)) dir.create(OUTPUT_DIR, recursive = TRUE)
+
+RARE_DEPTH <- 20
+N_ITERATIONS <- 1000
+TOP_N <- 10
+ACTIVE_THRESHOLD <- 0.7
+
+num_cores <- parallel::detectCores() - 6
+if(num_cores < 1) num_cores <- 1
+registerDoParallel(cores = num_cores)
+
+phylum_colors <- c(
+  "Actinomycetota"    = "#E41A1C",
+  "Bacillota"         = "#377EB8",
+  "Bacillota_A"       = "#4DAF4A",
+  "Bacillota_B"       = "#984EA3",
+  "Bacillota_C"       = "#FF7F00",
+  "Bacillota_I"       = "#FFFF33",
+  "Bacteroidota"      = "#A65628",
+  "Desulfobacterota"  = "#F781BF",
+  "Fusobacteriota"    = "#999999",
+  "Pseudomonadota"    = "#66C2A5",
+  "Verrucomicrobiota" = "#FC8D62"
+)
+
+message(">>> [1/3] Environment configured. Initializing data loading...")
+
+main_file <- "merged_phage_stats_taxonomy.tsv"
+if (!file.exists(main_file)) stop("Error: missing merged_phage_stats_taxonomy.tsv")
+
+df <- read.delim(main_file, header = TRUE, sep = "\t", check.names = FALSE, quote = "")
+df$Activity_Score <- suppressWarnings(as.numeric(as.character(df$Activity_Score)))
+
+exact_file <- "stats_baseline_vOTU_EXACT.tsv"
+if(!file.exists(exact_file)) stop("Error: missing ", exact_file)
+
+exact_df <- read.delim(exact_file, header = TRUE, sep = "\t", check.names = FALSE)
+list_sa_votus <- exact_df %>% filter(Significance_Type == "Significant") %>% pull(vOTU) %>% unique()
+
+processed_df <- df %>%
+  mutate(
+    Is_SAvOTU = (vOTU %in% list_sa_votus) & (!is.na(Activity_Score) & Activity_Score >= ACTIVE_THRESHOLD)
+  ) %>%
+  filter(!is.na(Phylum) & Phylum != "" & !is.na(Genus) & Genus != "")
+
+message(sprintf("Loaded data. Identified %d unique SA-vOTUs.", length(list_sa_votus)))
+message(">>> [2/3] Performing parallel rarefaction analysis (Depth: 20, Iter: 1000)...")
+
+valid_hosts_df <- processed_df %>%
+  group_by(Genus, Phylum) %>%
+  summarise(n_genomes = n_distinct(Genome), .groups = "drop") %>%
+  filter(n_genomes >= RARE_DEPTH)
+
+if(nrow(valid_hosts_df) == 0) {
+  stop(paste("No host genus contains >= ", RARE_DEPTH, "genomes. Rarefaction aborted."))
+}
+
+rarefaction_results <- foreach(i = 1:nrow(valid_hosts_df), .combine = rbind, .packages = c("dplyr")) %dopar% {
+  h_genus <- valid_hosts_df$Genus[i]
+  h_phylum <- valid_hosts_df$Phylum[i]
+  sub_df <- processed_df %>% filter(Genus == h_genus)
+  all_genomes <- unique(sub_df$Genome)
+  sim_counts <- numeric(N_ITERATIONS)
+  for (k in 1:N_ITERATIONS) {
+    picked_genomes <- sample(all_genomes, RARE_DEPTH, replace = FALSE)
+    temp_df <- sub_df %>% filter(Genome %in% picked_genomes & Is_SAvOTU == TRUE)
+    sim_counts[k] <- n_distinct(temp_df$vOTU, na.rm = TRUE)
+  }
+  data.frame(
+    Genus = h_genus,
+    Phylum = h_phylum,
+    Rarefied_SAvOTU_Richness = mean(sim_counts),
+    stringsAsFactors = FALSE
+  )
+}
+
+stopImplicitCluster()
+
+message(">>> [3/3] Generating final Top 10 Barplot...")
+
+top_data <- rarefaction_results %>%
+  arrange(desc(Rarefied_SAvOTU_Richness)) %>%
+  slice_head(n = TOP_N)
+
+actual_phyla <- unique(top_data$Phylum)
+for(p in actual_phyla) {
+  if(!p %in% names(phylum_colors)) phylum_colors[p] <- "#BDBDBD"
+}
+
+p <- ggplot(top_data, aes(x = reorder(Genus, Rarefied_SAvOTU_Richness), y = Rarefied_SAvOTU_Richness, fill = Phylum)) +
+  geom_bar(stat = "identity", width = 0.7, color = "black", linewidth = 0.4) +
+  coord_flip() +
+  scale_fill_manual(values = phylum_colors) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.1))) +
+  labs(
+    title = paste0("Top ", TOP_N, " Host Genera Enriched with SA-vOTUs"),
+    subtitle = paste0("Standardized Mean Richness (Rarefaction: Depth=", RARE_DEPTH, ", Iterations=", N_ITERATIONS, ")"),
+    x = "Host Genus",
+    y = "Rarefied SA-vOTU Richness (Per 20 Genomes)",
+    fill = "Host Phylum"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", size = 15, color = "black"),
+    plot.subtitle = element_text(size = 11, color = "grey30"),
+    axis.title = element_text(face = "bold", size = 13, color = "black"),
+    axis.text.y = element_text(face = "bold.italic", size = 12, color = "black"),
+    axis.text.x = element_text(size = 12, color = "black"),
+    axis.line.x = element_line(color = "black", linewidth = 0.6),
+    legend.position = "right",
+    legend.title = element_text(face = "bold"),
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor.y = element_blank(),
+    panel.grid.minor.x = element_blank()
+  )
+
+out_file <- file.path(OUTPUT_DIR, "Fig_Top10_Genera_SAvOTU_Rarefaction.pdf")
+ggsave(out_file, p, width = 9, height = 6, bg = "white")
+
+message(">>> Script completed successfully! Output saved to: ", out_file)
