@@ -261,6 +261,8 @@ Key columns:
 
 A companion file recording depth summary statistics for every region processed, regardless of whether it passed the coverage threshold or hypothesis testing. This file is produced unconditionally alongside the test results. **Notion**: --rmall will remove this results
 
+Based on our tests, non-parametric tests will be used for calculations in the vast majority of cases. **We recommend a Cliff's delta ≥ 0.8 to be considered active**. Users can also adjust the threshold based on their specific needs and data structure (e.g., the threshold could potentially be lowered for VLP sequencing where the bacterial host background has been thoroughly removed), but it should not fall below the mathematical large effect size of 0.47.
+
 ## Statistical Methods
 Test selection is based on normality assessment using the Jarque-Bera test (alpha = 0.05) applied independently to the phage and host depth distributions:
 
