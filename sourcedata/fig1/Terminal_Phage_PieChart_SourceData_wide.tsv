@@ -1,0 +1,5 @@
+Figure	Source	Total	Internal Phage	Computable Terminal Phage	Incomputable Terminal Phage	Internal Phage (%)	Computable Terminal Phage (%)	Incomputable Terminal Phage (%)
+Assembly_benchmark	Assembly benchmark	660	89	218	353	13.4848	33.0303	53.4848
+Combined_GBIC_AB	AB	155	61	64	30	39.3548	41.2903	19.3548
+Combined_GBIC_AB	GBIC	807	458	232	117	56.7534	28.7485	14.4981
+Combined_GBIC_AB	GBIC+AB (Combined)	962	519	296	147	53.9501	30.7692	15.2807
