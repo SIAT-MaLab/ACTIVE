@@ -280,6 +280,12 @@ For significant t-test results (fast mode), Hedges' g (bias-corrected Cohen's D)
 A prophage region is excluded from hypothesis testing if fewer than --cov (default: 75%) of its positions have non-zero depth, as sparse coverage may indicate assembly artifacts or insufficient read recruitment rather than biological inactivity. Excluded regions are still recorded in the descriptive statistics file with their coverage value and depth summary statistics.
 ![image](https://github.com/SIAT-MaLab/ACTIVE/blob/main/figures1b.png)
 
+# GPAC--Gut Prophage Activity Catalog
+This dataset is a comprehensive, activity-annotated gut prophage atlas derived from cultured gut isolate collections. Prophage activity was inferred using ACTIVE with a Cliff’s delta threshold of **≥ 0.8** and represents activity during spontaneous induction in vitro under standard culture conditions.
+
+The metadata for hosts and all prophages in GPAC are available in **host_metadata.tsv** and **prophage_metadata.tsv**
+The sequences of all prophages and the representative vOTUs in GPAC will be made publicly available upon official publication of the manuscript.
+
 ## Citation
 If you use active in your research, please cite:
 > Y.H et al. A large-scale atlas of active gut prophages reveals significantly active prophage lineages in the human gut
