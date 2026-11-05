@@ -286,9 +286,8 @@ This dataset is a comprehensive, activity-annotated gut prophage atlas derived f
 The metadata for hosts and all prophages in GPAC are available in **host_metadata.tsv** and **prophage_metadata.tsv**
 The sequences of all prophages and the representative vOTUs in GPAC will be made publicly available upon official publication of the manuscript.
 
-## Citation
+# Citation
 If you use active in your research, please cite:
-> Y.H et al. A large-scale atlas of active gut prophages reveals significantly active prophage lineages in the human gut
-
+> A genome-resolved atlas reveals lineage-specific activity patterns of prophages in cultured human gut bacteria. Yan Huang, Ziqiang Liu, Jielin Li, Jie Hu, Xin Tan, Lei Dai, Yingfei Ma. bioRxiv 2026.05.11.724261; doi: https://doi.org/10.64898/2026.05.11.724261
 ## License
 This project is licensed under the MIT License.
